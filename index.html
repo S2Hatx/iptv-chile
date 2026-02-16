@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TV 3.1</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: white;
+}
+
+header {
+  padding: 15px 30px;
+  font-size: 22px;
+  font-weight: bold;
+  background: #111827;
+}
+
+.player-container {
+  width: 100%;
+  aspect-ratio: 16/9;
+  background: black;
+  position: relative;
+}
+
+video {
+  width: 100%;
+  height: 100%;
+}
+
+.ad-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background: black;
+  flex-direction: column;
+}
+
+.skip-btn {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: rgba(0,0,0,0.7);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: none;
+}
+
+.ad-label {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  background: rgba(0,0,0,0.7);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.section {
+  padding: 20px 30px;
+}
+
+.row {
+  display: flex;
+  gap: 15px;
+  overflow-x: auto;
+}
+
+.channel {
+  min-width: 180px;
+  height: 120px;
+  background: #1e293b;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  transition: 0.2s ease;
+}
+
+.channel:focus {
+  transform: scale(1.1);
+  box-shadow: 0 0 15px #3b82f6;
+}
+</style>
+</head>
+
+<body>
+
+<header>TV 3.1</header>
+
+<div class="player-container">
+  <video id="video" controls></video>
+
+  <div class="ad-overlay" id="adOverlay">
+    <video id="adVideo"></video>
+    <div class="ad-label">Publicidad</div>
+    <div class="skip-btn" id="skipBtn">Saltar en 5</div>
+  </div>
+</div>
+
+<div id="channels"></div>
+
+<script>
+const M3U_URL = "https://raw.githubusercontent.com/S2Hatx/iptv-chile/main/chile.m3u";
+
+const ADS = [
+  { url: "https://S2Hatx.github.io/iptv-chile/ads/ad1.mp4", link: "https://www.mercadolibre.cl" }
+];
+
+const MIDROLL_INTERVAL = 5 * 60 * 1000;
+
+const video = document.getElementById("video");
+const adOverlay = document.getElementById("adOverlay");
+const adVideo = document.getElementById("adVideo");
+const skipBtn = document.getElementById("skipBtn");
+
+let hls;
+let allChannels = [];
+let currentChannel = null;
+let midrollTimer = null;
+
+function getRandomAd(){
+  return ADS[Math.floor(Math.random() * ADS.length)];
+}
+
+function playAd(callback){
+  const ad = getRandomAd();
+
+  adOverlay.style.display = "flex";
+  adVideo.src = ad.url;
+  adVideo.muted = true;
+  adVideo.playsInline = true;
+
+  adVideo.onloadeddata = () => {
+    adVideo.play().catch(err => console.log("Autoplay bloqueado", err));
+  };
+
+  let skipCountdown = 5;
+  skipBtn.style.display = "none";
+  skipBtn.textContent = "Saltar en 5";
+
+  const skipInterval = setInterval(()=>{
+    skipCountdown--;
+    skipBtn.textContent = "Saltar en " + skipCountdown;
+    if(skipCountdown <= 0){
+      clearInterval(skipInterval);
+      skipBtn.textContent = "Saltar";
+      skipBtn.style.display = "block";
+    }
+  },1000);
+
+  skipBtn.onclick = ()=>{
+    endAd(callback);
+  };
+
+  adVideo.onclick = ()=>{
+    window.open(ad.link, "_blank");
+  };
+
+  adVideo.onended = ()=>{
+    endAd(callback);
+  };
+}
+
+function endAd(callback){
+  adVideo.pause();
+  adOverlay.style.display = "none";
+  callback();
+}
+
+function startChannel(channel){
+  if(hls) hls.destroy();
+
+  currentChannel = channel;
+
+  if(Hls.isSupported()){
+    hls = new Hls();
+    hls.loadSource(channel.url);
+    hls.attachMedia(video);
+  } else {
+    video.src = channel.url;
+  }
+
+  startMidrollTimer();
+}
+
+function playChannel(channel){
+  playAd(()=>{
+    startChannel(channel);
+  });
+}
+
+function startMidrollTimer(){
+  if(midrollTimer) clearInterval(midrollTimer);
+
+  midrollTimer = setInterval(()=>{
+    if(currentChannel){
+      const currentTime = video.currentTime;
+      video.pause();
+      playAd(()=>{
+        video.currentTime = currentTime;
+        video.play();
+      });
+    }
+  }, MIDROLL_INTERVAL);
+}
+
+fetch(M3U_URL)
+  .then(res=>res.text())
+  .then(data=>parseM3U(data));
+
+function parseM3U(data){
+  const lines = data.split("\n");
+  let current={};
+
+  lines.forEach(line=>{
+    if(line.startsWith("#EXTINF")){
+      const name=line.match(/,(.*)/);
+      current={ name:name?name[1].trim():"Canal" };
+    } else if(line.startsWith("http")){
+      current.url=line.trim();
+      allChannels.push(current);
+    }
+  });
+
+  renderChannels();
+}
+
+function renderChannels(){
+  const container=document.getElementById("channels");
+
+  const section=document.createElement("div");
+  section.className="section";
+
+  const row=document.createElement("div");
+  row.className="row";
+
+  allChannels.forEach(ch=>{
+    const div=document.createElement("div");
+    div.className="channel";
+    div.tabIndex=0;
+    div.textContent=ch.name;
+
+    div.addEventListener("click",()=>playChannel(ch));
+    div.addEventListener("keydown",e=>{
+      if(e.key==="Enter") playChannel(ch);
+    });
+
+    row.appendChild(div);
+  });
+
+  section.appendChild(row);
+  container.appendChild(section);
+}
+</script>
+
+</body>
+</html>
